@@ -1,4 +1,5 @@
 use crate::tensor::Tensor;
+use rayon::prelude::*;
 
 // get (row) vectors from a 2D table given a list of indices
 pub fn gather(y: &mut Tensor<f32>, indices: &Tensor<u32>, table: &Tensor<f32>) {
@@ -71,7 +72,45 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
 }
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
-    todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    // todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    assert!(
+        y.size() == x.size(),
+        "Input and output tensors must have the same size"
+    );
+
+    assert!(
+        w.shape().len() == 1,
+        "Weight tensor w must be 1-dimensional"
+    );
+
+    assert!(
+        w.size() == x.shape().last().copied().unwrap_or(0),
+        "Weight tensor must match last dimension of the input tensor"
+    );
+
+    let x_data = x.data();
+    let w_data = w.data();
+
+    let last_dim = x.shape().last().copied().unwrap_or(0);
+    if last_dim == 0 {
+        return;
+    }
+
+    unsafe {
+        y.data_mut()
+            .par_chunks_mut(last_dim)
+            .zip(x_data.par_chunks(last_dim))
+            .for_each(|(y_slice, x_slice)| {
+                // Compute the RMS value for the current slice
+                let rms = (x_slice.iter().map(|&val| val * val).sum::<f32>() / last_dim as f32
+                    + epsilon)
+                    .sqrt();
+
+                for j in 0..last_dim {
+                    y_slice[j] = w_data[j] * x_slice[j] / rms;
+                }
+            });
+    }
 }
 
 // y = silu(x) * y
@@ -83,13 +122,52 @@ pub fn swiglu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
     // let _y = unsafe { y.data_mut() };
     // let _x = x.data();
 
-    todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
+    assert!(
+        y.shape() == x.shape(),
+        "Input and output tensors must have the same shape"
+    );
+
+    let y_data = unsafe { y.data_mut() };
+    let x_data = x.data();
+
+    y_data
+        .iter_mut()
+        .zip(x_data.iter())
+        .for_each(|(y_elem, &x_elem)| {
+            let x_sigmoid = 1.0 / (1.0 + (-x_elem).exp());
+            *y_elem *= x_sigmoid * x_elem;
+        });
+
+    // todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
 }
 
 // C = beta * C + alpha * A @ B^T
 // hint: You don't need to do an explicit transpose of B
 pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    // todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    let (a_row, a_col) = (a.shape()[0], a.shape()[1]);
+    let (b_row, b_col) = (b.shape()[0], b.shape()[1]);
+    let (c_row, c_col) = (c.shape()[0], c.shape()[1]);
+
+    assert!(a_col == b_col, "Inner dimensions of A and B must match");
+    assert!(
+        a_row == c_row && b_row == c_col,
+        "Output matrix C must have shape (a_row, b_row)"
+    );
+
+    let a_data = a.data();
+    let b_data = b.data();
+    let c_data = unsafe { c.data_mut() };
+
+    for i in 0..c_row {
+        for j in 0..c_col {
+            let mut sum = 0.0;
+            for k in 0..a_col {
+                sum += a_data[i * a_col + k] * b_data[j * b_col + k];
+            }
+            c_data[i * c_col + j] = beta * c_data[i * c_col + j] + alpha * sum;
+        }
+    }
 }
 
 // Dot product of two tensors (treated as vectors)
